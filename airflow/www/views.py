@@ -209,11 +209,6 @@ def data_profiling_required(f):
     return decorated_function
 
 
-def pool_link(v, c, m, p):
-    url = '/admin/taskinstance/?flt1_pool_equals=' + m.pool
-    return Markup("<a href='{url}'>{m.pool}</a>".format(**locals()))
-
-
 def fused_slots(v, c, m, p):
     url = (
         '/admin/taskinstance/' +
@@ -1182,15 +1177,13 @@ class Airflow(BaseView):
 
         task_instances = {
             ti.task_id: utils.alchemy_to_dict(ti)
-            for ti in dag.get_task_instances(session, dttm, dttm)
-            }
+            for ti in dag.get_task_instances(session, dttm, dttm)}
         tasks = {
             t.task_id: {
                 'dag_id': t.dag_id,
                 'task_type': t.task_type,
             }
-            for t in dag.tasks
-            }
+            for t in dag.tasks}
         if not tasks:
             flash("No tasks found", "error")
         session.commit()
@@ -1795,7 +1788,7 @@ class TaskInstanceModelView(ModelViewOnly):
     column_list = (
         'state', 'dag_id', 'task_id', 'execution_date', 'operator',
         'start_date', 'end_date', 'duration', 'job_id', 'hostname',
-        'unixname', 'priority_weight', 'queue', 'queued_dttm', 'log')
+        'unixname', 'priority_weight', 'queue', 'queued_dttm', 'pool', 'log')
     can_delete = True
     page_size = 500
 
