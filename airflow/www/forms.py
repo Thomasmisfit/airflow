@@ -3,28 +3,16 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask.ext.admin.form import DateTimePickerWidget
-from wtforms import (
-    Form, DateTimeField, SelectField
-)
+from wtforms import DateTimeField, SelectField
+from flask_wtf import Form
 
 
 class DateTimeForm(Form):
     # Date filter form needed for gantt and graph view
     execution_date = DateTimeField(
         "Execution date", widget=DateTimePickerWidget())
-
-
-class GraphForm(Form):
-    execution_date = DateTimeField(
-        "Execution date", widget=DateTimePickerWidget())
-    arrange = SelectField("Layout", choices=(
-        ('LR', "Left->Right"),
-        ('RL', "Right->Left"),
-        ('TB', "Top->Bottom"),
-        ('BT', "Bottom->Top"),
-    ))
 
 
 class TreeForm(Form):

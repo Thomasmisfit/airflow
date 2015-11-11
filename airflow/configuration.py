@@ -53,7 +53,9 @@ defaults = {
         'plugins_folder': None,
         'security': None,
         'donot_pickle': False,
-        's3_log_folder': ''
+        's3_log_folder': '',
+        'dag_concurrency': 16,
+        'max_active_runs_per_dag': 16,
     },
     'webserver': {
         'base_url': 'http://localhost:8080',
@@ -119,6 +121,12 @@ sql_alchemy_conn = sqlite:///{AIRFLOW_HOME}/airflow.db
 # the max number of task instances that should run simultaneously
 # on this airflow installation
 parallelism = 32
+
+# The number of task instances allowed to run concurrently by the scheduler
+dag_concurrency = 16
+
+# The maximum number of active DAG runs per DAG
+max_active_runs_per_dag = 16
 
 # Whether to load the examples that ship with Airflow. It's good to
 # get started, but you probably want to set this to False in a production
@@ -271,6 +279,7 @@ sql_alchemy_conn = sqlite:///{AIRFLOW_HOME}/unittests.db
 unit_test_mode = True
 load_examples = True
 donot_pickle = False
+dag_concurrency = 16
 
 [webserver]
 base_url = http://localhost:8080
@@ -312,7 +321,7 @@ class ConfigParserWithDefaults(ConfigParser):
         d = self.defaults
 
         # environment variables get precedence
-        # must have format AIRFLOW__{SESTION}__{KEY} (note double underscore)
+        # must have format AIRFLOW__{SECTION}__{KEY} (note double underscore)
         env_var = 'AIRFLOW__{S}__{K}'.format(S=section.upper(), K=key.upper())
         if env_var in os.environ:
             return expand_env_var(os.environ[env_var])
@@ -405,3 +414,22 @@ def test_mode():
 
 conf = ConfigParserWithDefaults(defaults)
 conf.read(AIRFLOW_CONFIG)
+
+
+def get(section, key, **kwargs):
+    return conf.get(section, key, **kwargs)
+
+
+def getboolean(section, key):
+    return conf.getboolean(section, key)
+
+
+def getfloat(section, key):
+    return conf.getfloat(section, key)
+
+def getint(section, key):
+    return conf.getint(section, key)
+
+def has_option(section, key):
+    return conf.has_option(section, key)
+

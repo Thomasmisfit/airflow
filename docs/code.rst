@@ -1,5 +1,5 @@
-Code / API
-==========
+API Reference
+=============
 
 Operators
 ---------
@@ -76,7 +76,8 @@ Operator API
         SlackAPIPostOperator,
         SqlSensor,
         SubDagOperator,
-        TimeSensor
+        TimeSensor,
+        WebHdfsSensor
 
 
 Community-contributed Operators
@@ -123,6 +124,8 @@ Variable                            Description
                                     ``airflow.configuration.conf`` which
                                     represents the content of your
                                     ``airflow.cfg``
+``run_id``                          the ``run_id`` of the current DAG run
+``dag_run``                         a reference to the DAG run object
 =================================   ====================================
 
 Note that you can access the object's attributes and methods with simple
@@ -172,7 +175,8 @@ Hooks
         PostgresHook,
         PrestoHook,
         S3Hook,
-        SqliteHook
+        SqliteHook,
+        WebHDFSHook
 
 Community contributed hooks
 '''''''''''''''''''''''''''

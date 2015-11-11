@@ -8,13 +8,13 @@ import gzip
 import functools
 
 from flask import after_this_request, request
-from flask_login import current_user
+from flask.ext.login import current_user
 import wtforms
 from wtforms.compat import text_type
 
-from airflow.configuration import conf
+from airflow import configuration
 from airflow import login, models, settings
-AUTHENTICATE = conf.getboolean('webserver', 'AUTHENTICATE')
+AUTHENTICATE = configuration.getboolean('webserver', 'AUTHENTICATE')
 
 
 class LoginMixin(object):
@@ -78,8 +78,8 @@ def action_logging(f):
     def wrapper(*args, **kwargs):
         session = settings.Session()
 
-        if hasattr(login.current_user, 'username'):
-            user = login.current_user.username
+        if current_user and hasattr(current_user, 'username'):
+            user = current_user.username
         else:
             user = 'anonymous'
 

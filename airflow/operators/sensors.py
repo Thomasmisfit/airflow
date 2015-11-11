@@ -71,12 +71,9 @@ class SqlSensor(BaseSensorOperator):
 
     @apply_defaults
     def __init__(self, conn_id, sql, *args, **kwargs):
-
-        super(SqlSensor, self).__init__(*args, **kwargs)
-
         self.sql = sql
         self.conn_id = conn_id
-
+        super(SqlSensor, self).__init__(*args, **kwargs)
 
     def poke(self, context):
         hook = BaseHook.get_connection(self.conn_id).get_hook()
@@ -277,6 +274,29 @@ class HdfsSensor(BaseSensorOperator):
         return True
 
 
+class WebHdfsSensor(BaseSensorOperator):
+    """
+    Waits for a file or folder to land in HDFS
+    """
+    template_fields = ('filepath',)
+
+    @apply_defaults
+    def __init__(
+            self,
+            filepath,
+            webhdfs_conn_id='webhdfs_default',
+            *args, **kwargs):
+        super(WebHdfsSensor, self).__init__(*args, **kwargs)
+        self.filepath = filepath
+        self.hdfs_conn_id = webhdfs_conn_id
+
+    def poke(self, context):
+        c = hooks.WebHDFSHook(self.webhdfs_conn_id).get_conn()
+        logging.info(
+            'Poking for file {self.filepath} '.format(**locals()))
+        return c.check_for_path(hdfs_path=self.filepath)
+
+
 class S3KeySensor(BaseSensorOperator):
     """
     Waits for a key (a file-like instance on S3) to be present in a S3 bucket.
@@ -424,10 +444,9 @@ class TimeDeltaSensor(BaseSensorOperator):
         self.delta = delta
 
     def poke(self, context):
-        target_dttm = (
-            context['execution_date'] +
-            context['dag'].schedule_interval +
-            self.delta)
+        dag = context['dag']
+        target_dttm = dag.following_schedule(context['execution_date'])
+        target_dttm += self.delta
         logging.info('Checking if the time ({0}) has come'.format(target_dttm))
         return datetime.now() > target_dttm
 

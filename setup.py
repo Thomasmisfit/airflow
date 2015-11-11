@@ -34,6 +34,7 @@ doc = [
 ]
 druid = ['pydruid>=0.2.1']
 hdfs = ['snakebite>=2.4.13']
+webhdfs = ['hdfs[dataframe,avro,kerberos]>=2.0.4']
 hive = [
     'hive-thrift-py>=0.0.1',
     'pyhive>=0.1.3',
@@ -50,6 +51,8 @@ samba = ['pysmbclient>=0.1.3']
 slack = ['slackclient>=0.15']
 statsd = ['statsd>=3.0.1, <4.0']
 vertica = ['vertica-python>=0.5.1']
+ldap = ['ldap3>=0.9.9.1']
+devel = ['lxml>=3.3.4']
 
 all_dbs = postgres + mysql + hive + mssql + hdfs + vertica
 devel = all_dbs + doc + samba + s3 + ['nose'] + slack + crypto + oracle
@@ -66,6 +69,7 @@ setup(
     install_requires=[
         'alembic>=0.8.0, <0.9',
         'chartkick>=0.4.2, < 0.5',
+        'croniter>=0.3.8, <0.4',
         'dill>=0.2.2, <0.3',
         'flask>=0.10.1, <0.11',
         'flask-admin==1.2.0',
@@ -82,6 +86,7 @@ setup(
         'setproctitle>=1.1.8, <2',
         'sqlalchemy>=0.9.8',
         'thrift>=0.9.2, <0.10',
+        'Flask-WTF==0.12'
     ],
     extras_require={
         'all': devel + optional,
@@ -103,6 +108,8 @@ setup(
         'slack': slack,
         'statsd': statsd,
         'vertica': vertica,
+        'ldap': ldap,
+        'webhdfs': webhdfs,
     },
     author='Maxime Beauchemin',
     author_email='maximebeauchemin@gmail.com',
