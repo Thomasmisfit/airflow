@@ -181,6 +181,7 @@ def initdb():
         models.Connection(
             conn_id='mysql_default', conn_type='mysql',
             login='root',
+            password='123456',
             host='localhost'))
     merge_conn(
         models.Connection(
