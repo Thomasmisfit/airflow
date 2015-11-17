@@ -282,7 +282,7 @@ class SchedulerJob(BaseJob):
 
         if slas:
             sla_dates = [sla.execution_date for sla in slas]
-            blocking_tis = (
+            qry = (
                 session
                 .query(TI)
                 .filter(TI.state != State.SUCCESS)
@@ -290,8 +290,15 @@ class SchedulerJob(BaseJob):
                 .filter(TI.dag_id == dag.dag_id)
                 .all()
             )
-            for ti in blocking_tis:
+            blocking_tis = []
+            for ti in qry:
+                if ti.task_id in dag.task_ids:
                     ti.task = dag.get_task(ti.task_id)
+                    blocking_tis.append(ti)
+                else:
+                    session.delete(ti)
+                    session.commit()
+
             blocking_tis = ([ti for ti in blocking_tis
                             if ti.are_dependencies_met(main_session=session)])
             task_list = "\n".join([
@@ -378,9 +385,10 @@ class SchedulerJob(BaseJob):
             elif dag.schedule_interval == '@once' and not last_scheduled_run:
                 next_run_date = datetime.now()
 
-            if (
-                    next_run_date and
-                    dag.following_schedule(next_run_date) <= datetime.now()):
+            schedule_end = dag.following_schedule(next_run_date)
+            if dag.schedule_interval == '@once':
+                schedule_end = next_run_date
+            if next_run_date and schedule_end and schedule_end <= datetime.now():
                 next_run = DagRun(
                     dag_id=dag.dag_id,
                     run_id='scheduled__' + next_run_date.isoformat(),
@@ -427,7 +435,7 @@ class SchedulerJob(BaseJob):
 
         active_runs = dag.get_active_runs()
 
-        # Making a set of task instances that are easy to skip based on state
+        logging.info('Getting list of tasks to skip for active runs.')
         skip_tis = set()
         if active_runs:
             qry = (
@@ -440,7 +448,11 @@ class SchedulerJob(BaseJob):
             )
             skip_tis = {(ti[0], ti[1]) for ti in qry.all()}
 
-        for task, dttm in product(dag.tasks, active_runs):
+        descartes = [obj for obj in product(dag.tasks, active_runs)]
+        logging.info(
+            'Checking dependencies on {} tasks instances, '
+            'minus {} skippable ones'.format(len(descartes), len(skip_tis)))
+        for task, dttm in descartes:
             if task.adhoc or (task.task_id, dttm) in skip_tis:
                 continue
             ti = TI(task, dttm)
@@ -476,6 +488,7 @@ class SchedulerJob(BaseJob):
             .filter(TI.state == State.QUEUED)
             .all()
         )
+        logging.info("Prioritizing {} queued jobs".format(len(queued_tis)))
         session.expunge_all()
         d = defaultdict(list)
         for ti in queued_tis:
@@ -488,8 +501,19 @@ class SchedulerJob(BaseJob):
             else:
                 d[ti.pool].append(ti)
 
+        overloaded_dags = set()
         for pool, tis in list(d.items()):
-            open_slots = pools[pool].open_slots(session=session)
+            if not pool:
+                # Arbitrary:
+                # If queued outside of a pool, trigger no more than 32 per run
+                open_slots = 128
+            else:
+                open_slots = pools[pool].open_slots(session=session)
+
+            queue_size = len(tis)
+            logging.info(
+                "Pool {pool} has {open_slots} slots, "
+                "{queue_size} task instances in queue".format(**locals()))
             if not open_slots:
                 return
             tis = sorted(
@@ -503,41 +527,36 @@ class SchedulerJob(BaseJob):
                 except:
                     logging.error("Queued task {} seems gone".format(ti))
                     session.delete(ti)
-                if task:
-                    ti.task = task
-
-                    # picklin'
-                    dag = dagbag.dags[ti.dag_id]
-                    pickle_id = None
-                    if self.do_pickle and self.executor.__class__ not in (
-                            executors.LocalExecutor,
-                            executors.SequentialExecutor):
-                        pickle_id = dag.pickle(session).id
-
-                    if (
-                            ti.are_dependencies_met() and
-                            not task.dag.concurrency_reached):
-                        executor.queue_task_instance(
-                            ti, force=True, pickle_id=pickle_id)
-                        open_slots -= 1
-                    else:
-                        session.delete(ti)
-                        continue
-                    ti.task = task
-
-                    # picklin'
-                    dag = dagbag.dags[ti.dag_id]
-                    pickle_id = None
-                    if self.do_pickle and self.executor.__class__ not in (
-                        executors.LocalExecutor, executors.SequentialExecutor):
-                        pickle_id = dag.pickle(session).id
-
-                    if ti.are_dependencies_met():
-                        executor.queue_task_instance(
-                            ti, force=True, pickle_id=pickle_id)
-                    else:
-                        session.delete(ti)
                     session.commit()
+                    continue
+
+                if not task:
+                    continue
+
+                ti.task = task
+
+                # picklin'
+                dag = dagbag.dags[ti.dag_id]
+                pickle_id = None
+                if self.do_pickle and self.executor.__class__ not in (
+                        executors.LocalExecutor,
+                        executors.SequentialExecutor):
+                    logging.info("Pickling DAG {}".format(dag))
+                    pickle_id = dag.pickle(session).id
+
+                if dag.dag_id in overloaded_dags or dag.concurrency_reached:
+                    overloaded_dags.add(dag.dag_id)
+                    continue
+                if ti.are_dependencies_met():
+                    executor.queue_task_instance(
+                        ti, force=True, pickle_id=pickle_id)
+                    open_slots -= 1
+                else:
+                    session.delete(ti)
+                    continue
+                ti.task = task
+
+                session.commit()
 
     def _execute(self):
         dag_id = self.dag_id

@@ -4,16 +4,16 @@ from builtins import str
 from builtins import object
 from cgi import escape
 from io import BytesIO as IO
-import gzip
 import functools
-
-from flask import after_this_request, request
+import gzip
+import dateutil.parser as dateparser
+import json
+from flask import after_this_request, request, Response
 from flask.ext.login import current_user
 import wtforms
 from wtforms.compat import text_type
 
-from airflow import configuration
-from airflow import login, models, settings
+from airflow import configuration, models, settings, utils
 AUTHENTICATE = configuration.getboolean('webserver', 'AUTHENTICATE')
 
 
@@ -83,17 +83,35 @@ def action_logging(f):
         else:
             user = 'anonymous'
 
-        session.add(
-            models.Log(
+        log = models.Log(
                 event=f.__name__,
                 task_instance=None,
                 owner=user,
-                extra=str(request.args.items())))
+                extra=str(request.args.items()),
+                task_id=request.args.get('task_id'),
+                dag_id=request.args.get('dag_id'))
+
+        if 'execution_date' in request.args:
+            log.execution_date = dateparser.parse(
+                request.args.get('execution_date'))
+
+        session.add(log)
         session.commit()
+
         return f(*args, **kwargs)
+    
     return wrapper
 
 
+def json_response(obj):
+    """
+    returns a json response from a json serializable python object
+    """
+    return Response(
+        response=json.dumps(
+            obj, indent=4, cls=utils.AirflowJsonEncoder),
+        status=200,
+        mimetype="application/json")
 
 def gzipped(f):
     '''
