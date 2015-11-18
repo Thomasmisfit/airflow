@@ -377,10 +377,10 @@ class Connection(Base):
             schema=None, port=None, extra=None,
             uri=None):
         self.conn_id = conn_id
-        self.conn_type = conn_type
         if uri:
             self.parse_from_uri(uri)
         else:
+            self.conn_type = conn_type
             self.host = host
             self.login = login
             self.password = password
@@ -393,6 +393,10 @@ class Connection(Base):
         hostname = temp_uri.hostname or ''
         if '%2f' in hostname:
             hostname = hostname.replace('%2f', '/').replace('%2F', '/')
+        conn_type = temp_uri.scheme
+        if conn_type == 'postgresql':
+            conn_type = 'postgres'
+        self.conn_type = conn_type
         self.host = hostname
         self.schema = temp_uri.path[1:]
         self.login = temp_uri.username
@@ -919,6 +923,10 @@ class TaskInstance(Base):
             logging.info(msg.format(**locals()))
 
             self.start_date = datetime.now()
+            if self.state == State.UP_FOR_RETRY:
+                self.try_number += 1
+            else:
+                self.try_number = 1
             if not force and (self.pool or self.task.dag.concurrency_reached):
                 # If a pool is set for this task, marking the task instance
                 # as QUEUED
@@ -929,10 +937,6 @@ class TaskInstance(Base):
                 session.close()
                 logging.info("Queuing into pool {}".format(self.pool))
                 return
-            if self.state == State.UP_FOR_RETRY:
-                self.try_number += 1
-            else:
-                self.try_number = 1
             if not test_mode:
                 session.add(Log(State.RUNNING, self))
             self.state = State.RUNNING
