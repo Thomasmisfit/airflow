@@ -237,6 +237,10 @@ def initdb():
         models.Connection(
             conn_id='ssh_default', conn_type='ssh',
             host='localhost'))
+    merge_conn(
+        models.Connection(
+            conn_id='s3_default', conn_type='s3',
+            extra='{"s3_config_file":"/Users/thomas/.aws/credentials","s3_config_format":"aws"}'))
 
     # Known event types
     KET = models.KnownEventType

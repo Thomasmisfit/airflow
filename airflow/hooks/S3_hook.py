@@ -150,6 +150,7 @@ class S3Hook(BaseHook):
         if self._sts_conn_required:
             sts_connection = STSConnection(aws_access_key_id=a_key,
                                            aws_secret_access_key=s_key,
+                                           calling_format=OrdinaryCallingFormat(),
                                            profile_name=self.profile)
             assumed_role_object = sts_connection.assume_role(
                 role_arn=self.role_arn,
@@ -165,6 +166,7 @@ class S3Hook(BaseHook):
         else:
             connection = S3Connection(aws_access_key_id=a_key,
                                       aws_secret_access_key=s_key,
+                                      calling_format=OrdinaryCallingFormat(),
                                       profile_name=self.profile)
         return connection
 
