@@ -11,6 +11,7 @@ from configparser import ConfigParser
 import errno
 import logging
 import os
+import subprocess
 
 try:
     from cryptography.fernet import Fernet
@@ -41,6 +42,22 @@ def expand_env_var(env_var):
         else:
             env_var = interpolated
 
+def run_command(command):
+    """
+    Runs command and returns stdout
+    """
+    process = subprocess.Popen(
+        command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, stderr = process.communicate()
+
+    if process.returncode != 0:
+        raise AirflowException(
+            "Cannot execute {}. Error code is: {}. Output: {}, Stderr: {}"
+            .format(cmd, process.returncode, output, stderr)
+        )
+
+    return output
+
 
 class AirflowConfigException(Exception):
     pass
@@ -54,8 +71,14 @@ defaults = {
         'security': None,
         'donot_pickle': False,
         's3_log_folder': '',
+        'encrypt_s3_logs': False,
         'dag_concurrency': 16,
         'max_active_runs_per_dag': 16,
+        'executor': 'SequentialExecutor',
+        'dags_are_paused_at_creation': False,
+        'sql_alchemy_pool_size': 5,
+        'sql_alchemy_pool_recycle': 3600,
+        'dagbag_import_timeout': 30,
     },
     'webserver': {
         'base_url': 'http://localhost:8080',
@@ -82,8 +105,14 @@ defaults = {
         'default_queue': 'default',
         'flower_port': '5555'
     },
+    'email': {
+        'email_backend': 'airflow.utils.send_email_smtp',
+    },
     'smtp': {
         'smtp_starttls': True,
+        'smtp_ssl': False,
+        'smtp_user': '',
+        'smtp_password': '',
     },
     'kerberos': {
         'ccache': '/tmp/airflow_krb5_ccache',
@@ -91,6 +120,9 @@ defaults = {
         'reinit_frequency': '3600',
         'kinit_path': 'kinit',
         'keytab': 'airflow.keytab',
+    },
+    'github_enterprise': {
+        'api_rev': 'v3'
     }
 }
 
@@ -118,6 +150,15 @@ executor = SequentialExecutor
 # their website
 sql_alchemy_conn = sqlite:///{AIRFLOW_HOME}/airflow.db
 
+# The SqlAlchemy pool size is the maximum number of database connections
+# in the pool.
+sql_alchemy_pool_size = 5
+
+# The SqlAlchemy pool recycle is the number of seconds a connection
+# can be idle in the pool before it is invalidated. This config does
+# not apply to sqlite.
+sql_alchemy_pool_recycle = 3600
+
 # The amount of parallelism as a setting to the executor. This defines
 # the max number of task instances that should run simultaneously
 # on this airflow installation
@@ -125,6 +166,9 @@ parallelism = 32
 
 # The number of task instances allowed to run concurrently by the scheduler
 dag_concurrency = 16
+
+# Are DAGs paused by default at creation
+dags_are_paused_at_creation = False
 
 # The maximum number of active DAG runs per DAG
 max_active_runs_per_dag = 16
@@ -142,6 +186,9 @@ fernet_key = {FERNET_KEY}
 
 # Whether to disable pickling dags
 donot_pickle = False
+
+# How long before timing out a python file import while filling the DagBag
+dagbag_import_timeout = 30
 
 [webserver]
 # The base url of your website as airflow cannot guess what domain or
@@ -174,12 +221,16 @@ authenticate = False
 # Filter the list of dags by owner name (requires authentication to be enabled)
 filter_by_owner = False
 
+[email]
+email_backend = airflow.utils.send_email_smtp
+
 [smtp]
 # If you want airflow to send emails on retries, failure, and you want to
 # the airflow.utils.send_email function, you have to configure an smtp
 # server here
 smtp_host = localhost
 smtp_starttls = True
+smtp_ssl = False
 smtp_user = airflow
 smtp_port = 25
 smtp_password = airflow
@@ -285,12 +336,16 @@ unit_test_mode = True
 load_examples = True
 donot_pickle = False
 dag_concurrency = 16
+dags_are_paused_at_creation = False
 fernet_key = {FERNET_KEY}
 
 [webserver]
 base_url = http://localhost:8080
 web_server_host = 0.0.0.0
 web_server_port = 8080
+
+[email]
+email_backend = airflow.utils.send_email_smtp
 
 [smtp]
 smtp_host = localhost
@@ -317,13 +372,32 @@ authenticate = true
 
 class ConfigParserWithDefaults(ConfigParser):
 
+    # These configuration elements can be fetched as the stdout of commands
+    # following the "{section}__{name}__cmd" pattern, the idea behind this is to not
+    # store password on boxes in text files.
+    as_command_stdout = {
+        ('core', 'sql_alchemy_conn'),
+        ('celery', 'broker_url'),
+        ('celery', 'celery_result_backend')
+    }
+
     def __init__(self, defaults, *args, **kwargs):
         self.defaults = defaults
         ConfigParser.__init__(self, *args, **kwargs)
+        self.is_validated = False
+
+    def _validate(self):
+        if self.get("core", "executor") != 'SequentialExecutor' \
+                and "sqlite" in self.get('core', 'sql_alchemy_conn'):
+            raise AirflowConfigException("error: cannot use sqlite with the {}".
+                                                       format(self.get('core', 'executor')))
+
+        self.is_validated = True
 
     def get(self, section, key, **kwargs):
         section = str(section).lower()
         key = str(key).lower()
+        fallback_key = key + '_cmd'
         d = self.defaults
 
         # environment variables get precedence
@@ -335,6 +409,11 @@ class ConfigParserWithDefaults(ConfigParser):
         # ...then the config file
         elif self.has_option(section, key):
             return expand_env_var(ConfigParser.get(self, section, key, **kwargs))
+
+        elif ((section, key) in ConfigParserWithDefaults.as_command_stdout
+            and self.has_option(section, fallback_key)):
+            command = self.get(section, fallback_key)
+            return run_command(command)
 
         # ...then the defaults
         elif section in d and key in d[section]:
@@ -365,6 +444,9 @@ class ConfigParserWithDefaults(ConfigParser):
     def getfloat(self, section, key):
         return float(self.get(section, key))
 
+    def read(self, filenames):
+        ConfigParser.read(self, filenames)
+        self._validate()
 
 def mkdir_p(path):
     try:
@@ -437,7 +519,6 @@ conf.read(AIRFLOW_CONFIG)
 def get(section, key, **kwargs):
     return conf.get(section, key, **kwargs)
 
-
 def getboolean(section, key):
     return conf.getboolean(section, key)
 
@@ -453,10 +534,14 @@ def getint(section, key):
 def has_option(section, key):
     return conf.has_option(section, key)
 
+def remove_option(section, option):
+    return conf.remove_option(section, option)
+
+def set(section, option, value):
+    return conf.set(section, option, value)
 
 ########################
 # convenience method to access config entries
 
 def get_dags_folder():
     return os.path.expanduser(get('core', 'DAGS_FOLDER'))
-

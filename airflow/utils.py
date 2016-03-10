@@ -15,6 +15,7 @@ from email.mime.application import MIMEApplication
 import errno
 from functools import wraps
 import imp
+import importlib
 import inspect
 import json
 import logging
@@ -40,7 +41,6 @@ from croniter import croniter
 
 from airflow import settings
 from airflow import configuration
-from airflow.settings import LOGGING_LEVEL
 
 
 class AirflowException(Exception):
@@ -58,6 +58,16 @@ class TriggerRule(object):
     ONE_SUCCESS = 'one_success'
     ONE_FAILED = 'one_failed'
     DUMMY = 'dummy'
+
+    @classmethod
+    def is_valid(cls, trigger_rule):
+        return trigger_rule in cls.all_triggers()
+
+    @classmethod
+    def all_triggers(cls):
+        return [getattr(cls, attr)
+                for attr in dir(cls)
+                if not attr.startswith("__") and not callable(getattr(cls, attr))]
 
 
 class State(object):
@@ -104,7 +114,7 @@ class State(object):
     def runnable(cls):
         return [
             None, cls.FAILED, cls.UP_FOR_RETRY, cls.UPSTREAM_FAILED,
-            cls.SKIPPED]
+            cls.SKIPPED, cls.QUEUED]
 
 
 cron_presets = {
@@ -177,6 +187,9 @@ def initdb():
             conn_id='beeline_default', conn_type='beeline',
             host='localhost',
             schema='airflow'))
+    merge_conn(
+        models.Connection(
+            conn_id='bigquery_default', conn_type='bigquery'))
     merge_conn(
         models.Connection(
             conn_id='local_mysql', conn_type='mysql',
@@ -385,9 +398,8 @@ def json_ser(obj):
     json serializer that deals with dates
     usage: json.dumps(object, default=utils.json_ser)
     """
-    if isinstance(obj, datetime):
-        obj = obj.isoformat()
-    return obj
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
 
 
 def alchemy_to_dict(obj):
@@ -489,6 +501,16 @@ def ask_yesno(question):
 
 def send_email(to, subject, html_content, files=None, dryrun=False):
     """
+    Send email using backend specified in EMAIL_BACKEND.
+    """
+    path, attr = configuration.get('email', 'EMAIL_BACKEND').rsplit('.', 1)
+    module = importlib.import_module(path)
+    backend = getattr(module, attr)
+    return backend(to, subject, html_content, files=files, dryrun=dryrun)
+
+
+def send_email_smtp(to, subject, html_content, files=None, dryrun=False):
+    """
     Send an email with html content
 
     >>> send_email('test@example.com', 'foo', '<b>Foo</b> bar', ['/dev/null'], dryrun=True)
@@ -528,9 +550,10 @@ def send_MIME_email(e_from, e_to, mime_msg, dryrun=False):
     SMTP_USER = configuration.get('smtp', 'SMTP_USER')
     SMTP_PASSWORD = configuration.get('smtp', 'SMTP_PASSWORD')
     SMTP_STARTTLS = configuration.getboolean('smtp', 'SMTP_STARTTLS')
+    SMTP_SSL = configuration.getboolean('smtp', 'SMTP_SSL')
 
     if not dryrun:
-        s = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+        s = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) if SMTP_SSL else smtplib.SMTP(SMTP_HOST, SMTP_PORT)
         if SMTP_STARTTLS:
             s.starttls()
         if SMTP_USER and SMTP_PASSWORD:
@@ -611,11 +634,19 @@ class timeout(object):
         raise AirflowTaskTimeout(self.error_message)
 
     def __enter__(self):
-        signal.signal(signal.SIGALRM, self.handle_timeout)
-        signal.alarm(self.seconds)
+        try:
+            signal.signal(signal.SIGALRM, self.handle_timeout)
+            signal.alarm(self.seconds)
+        except ValueError as e:
+            logging.warning("timeout can't be used in the current context")
+            logging.exception(e)
 
     def __exit__(self, type, value, traceback):
-        signal.alarm(0)
+        try:
+            signal.alarm(0)
+        except ValueError as e:
+            logging.warning("timeout can't be used in the current context")
+            logging.exception(e)
 
 
 def is_container(obj):
@@ -756,27 +787,6 @@ class AirflowJsonEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def log_to_stdout():
-
-    root_logger = logging.getLogger()
-
-    # default log level if not set externally (e.g. with --logging-level=DEBUG)
-    if root_logger.level == logging.NOTSET:
-        root_logger.setLevel(LOGGING_LEVEL)
-
-    for handler in root_logger.handlers:
-        if isinstance(handler, logging.StreamHandler):
-            root_logger.warn("not adding a stream handler: already present")
-            return
-
-    logformat = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setFormatter(logformat)
-    root_logger.addHandler(ch)
-
-
 class LoggingMixin(object):
     """
     Convenience super-class to have a logger configured with the class name
@@ -784,6 +794,9 @@ class LoggingMixin(object):
 
     @property
     def logger(self):
-        if not hasattr(self, "_logger"):
-            self._logger = logging.getLogger(self.__class__.__name__)
-        return self._logger
+        try:
+            return self._logger
+        except AttributeError:
+            self._logger = logging.root.getChild(self.__class__.__module__ + '.' +self.__class__.__name__)
+            return self._logger
+
